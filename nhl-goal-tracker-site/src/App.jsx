@@ -63,6 +63,12 @@ async function safeJson(url) {
   return res.json();
 }
 
+// The browser can't call api-web.nhle.com directly (it blocks other
+// websites), so these two calls go through our own /api/nhl proxy instead.
+function proxied(path) {
+  return `/api/nhl?path=${encodeURIComponent(path)}`;
+}
+
 function fmtDate(d) {
   const dt = new Date(d + "T00:00:00");
   return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -211,12 +217,12 @@ export default function NhlGoalTracker() {
     setOpponentPick("");
     try {
       const id = basic.playerId || basic.id;
-      const landing = await safeJson(`https://api-web.nhle.com/v1/player/${id}/landing`);
+      const landing = await safeJson(proxied(`/v1/player/${id}/landing`));
 
       const seasons = recentSeasonCodes();
       const logs = await Promise.all(
         seasons.map((s) =>
-          safeJson(`https://api-web.nhle.com/v1/player/${id}/game-log/${s}/2`).catch(() => ({ gameLog: [] }))
+          safeJson(proxied(`/v1/player/${id}/game-log/${s}/2`)).catch(() => ({ gameLog: [] }))
         )
       );
 
@@ -301,7 +307,7 @@ export default function NhlGoalTracker() {
 
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 24, maxWidth: 1180, margin: "0 auto" }}>
         <div>
-          <h1 className="num" style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Goal Watch</h1>
+          <h1 className="num" style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Stat Strike</h1>
           <p style={{ fontSize: 13, color: "#56646E", margin: "0 0 18px" }}>
             Live player scoring streaks, matchup history &amp; next-game odds.
           </p>

@@ -210,12 +210,33 @@ function StreakBadge({ streak }) {
   );
 }
 
+function RosterPlayerRow({ p, onPick, showPoints }) {
+  return (
+    <button
+      key={p.id}
+      onClick={() => onPick({ playerId: p.id, name: `${p.firstName?.default || ""} ${p.lastName?.default || ""}`.trim() })}
+      style={{
+        textAlign: "left", background: "none", border: "none", padding: "5px 6px",
+        fontSize: 13, cursor: "pointer", color: "#0B2545", width: "100%",
+        display: "flex", justifyContent: "space-between",
+      }}
+      onMouseOver={(e) => (e.currentTarget.style.background = "#F4F8FA")}
+      onMouseOut={(e) => (e.currentTarget.style.background = "none")}
+    >
+      <span>
+        {p.firstName?.default} {p.lastName?.default}
+        <span style={{ color: "#8A97A0", marginLeft: 6 }}>{p.positionCode}</span>
+      </span>
+      {showPoints && <span style={{ color: "#8A97A0" }}>{p._points} pts</span>}
+    </button>
+  );
+}
+
 function RosterColumn({ label, abbr, roster, onPick }) {
   if (roster.error) return <p style={{ fontSize: 13, color: "#FF5A36" }}>Couldn't load this roster.</p>;
-  const skaters = [...(roster.forwards || []), ...(roster.defensemen || [])];
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
         <a
           href={dailyFaceoffUrl(abbr)}
@@ -226,22 +247,16 @@ function RosterColumn({ label, abbr, roster, onPick }) {
           Lines ↗
         </a>
       </div>
-      <div style={{ maxHeight: 260, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
-        {skaters.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => onPick({ playerId: p.id, name: `${p.firstName?.default || ""} ${p.lastName?.default || ""}`.trim() })}
-            style={{
-              textAlign: "left", background: "none", border: "none", padding: "5px 6px",
-              fontSize: 13, cursor: "pointer", color: "#0B2545",
-            }}
-            onMouseOver={(e) => (e.currentTarget.style.background = "#F4F8FA")}
-            onMouseOut={(e) => (e.currentTarget.style.background = "none")}
-          >
-            {p.firstName?.default} {p.lastName?.default}
-            <span style={{ color: "#8A97A0", marginLeft: 6 }}>{p.positionCode}</span>
-          </button>
-        ))}
+      <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 8 }}>Ranked by season points — not official lines</div>
+      <div style={{ maxHeight: 340, overflowY: "auto" }}>
+        <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "6px 0 2px" }}>Forwards</div>
+        {(roster.forwards || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints />)}
+
+        <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "10px 0 2px" }}>Defensemen</div>
+        {(roster.defensemen || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints />)}
+
+        <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "10px 0 2px" }}>Goalies</div>
+        {(roster.goalies || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints={false} />)}
       </div>
     </div>
   );
@@ -298,18 +313,39 @@ export default function NhlGoalTracker() {
     return () => clearInterval(interval);
   }, [loadTodaysGames]);
 
+  // Merges season point totals into a roster so skaters can be sorted
+  // best-to-worst as a stand-in for actual line order (which isn't public data).
+  function rankRoster(roster, statsList) {
+    if (!roster || roster.error) return roster;
+    const pointsMap = {};
+    (statsList || []).forEach((s) => { pointsMap[s.playerId] = s.points ?? 0; });
+    const withPoints = (arr) =>
+      [...(arr || [])]
+        .map((p) => ({ ...p, _points: pointsMap[p.id] ?? 0 }))
+        .sort((a, b) => b._points - a._points);
+    return {
+      ...roster,
+      forwards: withPoints(roster.forwards),
+      defensemen: withPoints(roster.defensemen),
+      goalies: withPoints(roster.goalies),
+    };
+  }
+
   const selectGame = useCallback(async (game) => {
     setSelectedGame(game);
     setRosterHome(null);
     setRosterAway(null);
     setRosterLoading(true);
     try {
-      const [home, away] = await Promise.all([
+      const season = recentSeasonCodes(1)[0];
+      const [home, away, homeStats, awayStats] = await Promise.all([
         safeJson(proxied(`/v1/roster/${game.homeTeam.abbrev}/current`)),
         safeJson(proxied(`/v1/roster/${game.awayTeam.abbrev}/current`)),
+        safeJson(proxied(`/v1/club-stats/${game.homeTeam.abbrev}/${season}/2`)).catch(() => ({ skaters: [] })),
+        safeJson(proxied(`/v1/club-stats/${game.awayTeam.abbrev}/${season}/2`)).catch(() => ({ skaters: [] })),
       ]);
-      setRosterHome(home);
-      setRosterAway(away);
+      setRosterHome(rankRoster(home, homeStats.skaters));
+      setRosterAway(rankRoster(away, awayStats.skaters));
     } catch (e) {
       setRosterHome({ error: true });
       setRosterAway({ error: true });

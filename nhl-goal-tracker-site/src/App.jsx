@@ -63,9 +63,15 @@ async function safeJson(url) {
   return res.json();
 }
 
+// The browser can't call api-web.nhle.com directly (it blocks other
+// websites), so these two calls go through our own /api/nhl proxy instead.
+function proxied(path) {
+  return `/api/nhl?path=${encodeURIComponent(path)}`;
+}
+
 function fmtDate(d) {
   const dt = new Date(d + "T00:00:00");
-  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function rollingAverage(arr, key, window) {
@@ -211,12 +217,12 @@ export default function NhlGoalTracker() {
     setOpponentPick("");
     try {
       const id = basic.playerId || basic.id;
-      const landing = await safeJson(`https://api-web.nhle.com/v1/player/${id}/landing`);
+      const landing = await safeJson(proxied(`/v1/player/${id}/landing`));
 
       const seasons = recentSeasonCodes();
       const logs = await Promise.all(
         seasons.map((s) =>
-          safeJson(`https://api-web.nhle.com/v1/player/${id}/game-log/${s}/2`).catch(() => ({ gameLog: [] }))
+          safeJson(proxied(`/v1/player/${id}/game-log/${s}/2`)).catch(() => ({ gameLog: [] }))
         )
       );
 
@@ -301,7 +307,7 @@ export default function NhlGoalTracker() {
 
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 24, maxWidth: 1180, margin: "0 auto" }}>
         <div>
-          <h1 className="num" style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Goal Watch</h1>
+          <h1 className="num" style={{ fontSize: 22, fontWeight: 700, margin: "0 0 4px" }}>Stat Strike</h1>
           <p style={{ fontSize: 13, color: "#56646E", margin: "0 0 18px" }}>
             Live player scoring streaks, matchup history &amp; next-game odds.
           </p>
@@ -471,25 +477,60 @@ export default function NhlGoalTracker() {
                 </Panel>
               </div>
 
-              <Panel>
-                <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>Performance by opponent</div>
-                {opponentStats.length === 0 ? (
-                  <p style={{ fontSize: 13, color: "#8A97A0" }}>No matchup history yet.</p>
-                ) : (
-                  <div style={{ maxHeight: 320, overflowY: "auto" }}>
-                    <table>
-                      <thead><tr><th>Opponent</th><th>Games</th><th>Goals</th><th>Goals / game</th></tr></thead>
-                      <tbody>
-                        {opponentStats.map((o) => (
-                          <tr key={o.opponent} className={o.opponent === activeOpponent ? "oppRow active" : "oppRow"} onClick={() => setOpponentPick(o.opponent)}>
-                            <td>{teamName(o.opponent)}</td><td>{o.games}</td><td>{o.goals}</td><td>{o.rate}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+                <Panel>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>Performance by opponent</div>
+                  {opponentStats.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#8A97A0" }}>No matchup history yet.</p>
+                  ) : (
+                    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                      <table>
+                        <thead><tr><th>Opponent</th><th>Games</th><th>Goals</th><th>Goals / game</th></tr></thead>
+                        <tbody>
+                          {opponentStats.map((o) => (
+                            <tr key={o.opponent} className={o.opponent === activeOpponent ? "oppRow active" : "oppRow"} onClick={() => setOpponentPick(o.opponent)}>
+                              <td>{teamName(o.opponent)}</td><td>{o.games}</td><td>{o.goals}</td><td>{o.rate}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Panel>
+
+                <Panel style={{ borderColor: "#0B2545" }}>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>
+                    Head-to-head — every game vs {activeOpponent ? teamName(activeOpponent) : "…"}
                   </div>
-                )}
-              </Panel>
+                  {activeOpponent ? (
+                    (() => {
+                      const h2h = gamesDesc.filter((g) => g.opponent === activeOpponent);
+                      return h2h.length === 0 ? (
+                        <p style={{ fontSize: 13, color: "#8A97A0" }}>No games found vs this opponent.</p>
+                      ) : (
+                        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                          <table>
+                            <thead><tr><th>Date</th><th>Site</th><th>Goals</th></tr></thead>
+                            <tbody>
+                              {h2h.map((g, i) => (
+                                <tr key={i}>
+                                  <td>{fmtDate(g.date)}</td>
+                                  <td>{g.home ? "Home" : "Away"}</td>
+                                  <td style={{ fontWeight: g.goals > 0 ? 700 : 400, color: g.goals > 0 ? "#FF5A36" : "#56646E" }}>
+                                    {g.goals}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <p style={{ fontSize: 13, color: "#8A97A0" }}>Pick a team from the table on the left.</p>
+                  )}
+                </Panel>
+              </div>
             </>
           )}
         </div>

@@ -477,25 +477,60 @@ export default function NhlGoalTracker() {
                 </Panel>
               </div>
 
-              <Panel>
-                <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>Performance by opponent</div>
-                {opponentStats.length === 0 ? (
-                  <p style={{ fontSize: 13, color: "#8A97A0" }}>No matchup history yet.</p>
-                ) : (
-                  <div style={{ maxHeight: 320, overflowY: "auto" }}>
-                    <table>
-                      <thead><tr><th>Opponent</th><th>Games</th><th>Goals</th><th>Goals / game</th></tr></thead>
-                      <tbody>
-                        {opponentStats.map((o) => (
-                          <tr key={o.opponent} className={o.opponent === activeOpponent ? "oppRow active" : "oppRow"} onClick={() => setOpponentPick(o.opponent)}>
-                            <td>{teamName(o.opponent)}</td><td>{o.games}</td><td>{o.goals}</td><td>{o.rate}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18 }}>
+                <Panel>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>Performance by opponent</div>
+                  {opponentStats.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#8A97A0" }}>No matchup history yet.</p>
+                  ) : (
+                    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                      <table>
+                        <thead><tr><th>Opponent</th><th>Games</th><th>Goals</th><th>Goals / game</th></tr></thead>
+                        <tbody>
+                          {opponentStats.map((o) => (
+                            <tr key={o.opponent} className={o.opponent === activeOpponent ? "oppRow active" : "oppRow"} onClick={() => setOpponentPick(o.opponent)}>
+                              <td>{teamName(o.opponent)}</td><td>{o.games}</td><td>{o.goals}</td><td>{o.rate}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </Panel>
+
+                <Panel style={{ borderColor: "#0B2545" }}>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>
+                    Head-to-head — every game vs {activeOpponent ? teamName(activeOpponent) : "…"}
                   </div>
-                )}
-              </Panel>
+                  {activeOpponent ? (
+                    (() => {
+                      const h2h = gamesDesc.filter((g) => g.opponent === activeOpponent);
+                      return h2h.length === 0 ? (
+                        <p style={{ fontSize: 13, color: "#8A97A0" }}>No games found vs this opponent.</p>
+                      ) : (
+                        <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                          <table>
+                            <thead><tr><th>Date</th><th>Site</th><th>Goals</th></tr></thead>
+                            <tbody>
+                              {h2h.map((g, i) => (
+                                <tr key={i}>
+                                  <td>{fmtDate(g.date)}</td>
+                                  <td>{g.home ? "Home" : "Away"}</td>
+                                  <td style={{ fontWeight: g.goals > 0 ? 700 : 400, color: g.goals > 0 ? "#FF5A36" : "#56646E" }}>
+                                    {g.goals}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <p style={{ fontSize: 13, color: "#8A97A0" }}>Pick a team from the table on the left.</p>
+                  )}
+                </Panel>
+              </div>
             </>
           )}
         </div>

@@ -45,16 +45,19 @@ function teamName(abbr) {
 }
 
 // NHL seasons run Oct→Jun. Resolve the current/most-recent season code
-// (e.g. 20252026) plus the one before it, so there's always a full,
-// consistent window of games even right after a new season starts.
-function recentSeasonCodes() {
+// (e.g. 20252026) plus a handful of seasons before it, so head-to-head
+// history goes back several years instead of just the last one or two.
+function recentSeasonCodes(count = 5) {
   const now = new Date();
   const y = now.getFullYear();
   const m = now.getMonth() + 1;
   const startYear = m >= 10 ? y : y - 1;
-  const cur = `${startYear}${startYear + 1}`;
-  const prev = `${startYear - 1}${startYear}`;
-  return [cur, prev];
+  const codes = [];
+  for (let i = 0; i < count; i++) {
+    const sy = startYear - i;
+    codes.push(`${sy}${sy + 1}`);
+  }
+  return codes;
 }
 
 async function safeJson(url) {

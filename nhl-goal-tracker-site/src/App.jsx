@@ -117,6 +117,27 @@ function poissonScoreProb(lambda) {
   return 1 - Math.exp(-lambda);
 }
 
+function todayStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// Looks at a team's schedule for this week and returns tonight's opponent,
+// if they have a game today. Returns null if they aren't playing today.
+function findTonightGame(scheduleData, teamAbbr) {
+  const today = todayStr();
+  const games = scheduleData?.games || [];
+  const match = games.find((g) => (g.gameDate || "").slice(0, 10) === today);
+  if (!match) return null;
+  const home = match.homeTeam?.abbrev;
+  const away = match.awayTeam?.abbrev;
+  const opponent = home === teamAbbr ? away : home;
+  return { opponent, home: home === teamAbbr };
+}
+
 function computePrediction(gamesDesc, opponentAbbr) {
   if (!gamesDesc.length) return null;
   const recentWindow = gamesDesc.slice(0, 10);
@@ -190,6 +211,8 @@ export default function NhlGoalTracker() {
   const [error, setError] = useState(null);
   const [watchlist, setWatchlist] = useState([]);
   const [opponentPick, setOpponentPick] = useState("");
+  const [tonight, setTonight] = useState(null); // { opponent, home } | null | "none"
+  const [parlay, setParlay] = useState([]);
 
   const runSearch = useCallback((q) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -218,6 +241,7 @@ export default function NhlGoalTracker() {
     setError(null);
     setSearchOpen(false);
     setOpponentPick("");
+    setTonight(null);
     try {
       const id = basic.playerId || basic.id;
       const landing = await safeJson(proxied(`/v1/player/${id}/landing`));
@@ -259,6 +283,14 @@ export default function NhlGoalTracker() {
         const filtered = wl.filter((p) => p.id !== info.id);
         return [info, ...filtered].slice(0, 6);
       });
+
+      try {
+        const schedule = await safeJson(proxied(`/v1/club-schedule/${info.team}/week/now`));
+        const tonightGame = findTonightGame(schedule, info.team);
+        setTonight(tonightGame || "none");
+      } catch (e) {
+        setTonight("none");
+      }
     } catch (e) {
       setError("Couldn't load that player's data. The NHL API may be temporarily unavailable — try again in a moment.");
       setPlayer(null);
@@ -292,6 +324,36 @@ export default function NhlGoalTracker() {
     () => (activeOpponent ? computePrediction(gamesDesc, activeOpponent) : null),
     [gamesDesc, activeOpponent]
   );
+
+  const tonightOpponent = tonight && tonight !== "none" ? tonight.opponent : "";
+  const tonightPrediction = useMemo(
+    () => (games.length ? computePrediction(gamesDesc, tonightOpponent) : null),
+    [gamesDesc, tonightOpponent, games.length]
+  );
+
+  const addToParlay = () => {
+    if (!player || !tonightPrediction) return;
+    setParlay((p) => {
+      if (p.some((x) => x.id === player.id)) return p;
+      if (p.length >= 5) return p;
+      return [
+        ...p,
+        {
+          id: player.id,
+          name: player.name,
+          team: player.team,
+          opponent: tonightOpponent || null,
+          scheduled: !!tonightOpponent,
+          scoreProb: tonightPrediction.scoreProb,
+          expectedGoals: tonightPrediction.expectedGoals,
+        },
+      ];
+    });
+  };
+  const removeFromParlay = (id) => setParlay((p) => p.filter((x) => x.id !== id));
+  const combinedProb = parlay.length
+    ? parlay.reduce((acc, p) => acc * (p.scoreProb / 100), 1)
+    : 0;
 
   return (
     <div style={{ fontFamily: "Inter, sans-serif", background: "#EEF3F6", color: "#0B2545", minHeight: "100vh", padding: "28px" }}>
@@ -358,6 +420,58 @@ export default function NhlGoalTracker() {
         </div>
 
         <div>
+          <Panel style={{ marginBottom: 18, borderColor: "#0B2545" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E" }}>
+                Tonight's parlay builder — {parlay.length}/5 picks
+              </div>
+              {parlay.length > 0 && (
+                <button onClick={() => setParlay([])} style={{ fontSize: 11, color: "#8A97A0", background: "none", border: "none", cursor: "pointer" }}>
+                  Clear all
+                </button>
+              )}
+            </div>
+            {parlay.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#8A97A0", margin: 0 }}>
+                Load a player and click "Add to parlay" to start building tonight's slate.
+              </p>
+            ) : (
+              <>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+                  {parlay.map((p) => (
+                    <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13, borderBottom: "1px solid #DCE4E9", paddingBottom: 6 }}>
+                      <span>
+                        {p.name}
+                        <span style={{ color: "#56646E" }}>
+                          {" "}· {p.scheduled ? `vs ${teamName(p.opponent)}` : "no game tonight"}
+                        </span>
+                      </span>
+                      <span style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                        <span className="num" style={{ fontWeight: 700 }}>{p.scoreProb}%</span>
+                        <button onClick={() => removeFromParlay(p.id)} style={{ background: "none", border: "none", color: "#8A97A0", cursor: "pointer", fontSize: 14 }}>×</button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 28, alignItems: "baseline" }}>
+                  <div>
+                    <div className="num" style={{ fontSize: 30, fontWeight: 700, color: "#FF5A36" }}>
+                      {Math.round(combinedProb * 100)}%
+                    </div>
+                    <div style={{ fontSize: 11, color: "#56646E", textTransform: "uppercase" }}>
+                      Chance ALL {parlay.length} score (parlay)
+                    </div>
+                  </div>
+                </div>
+                {parlay.length >= 3 && (
+                  <div style={{ fontSize: 11, color: "#8A97A0", marginTop: 10, borderTop: "1px solid #DCE4E9", paddingTop: 8, lineHeight: 1.5 }}>
+                    Each leg's chance is multiplied together — that's why the combined number drops fast as you add more players. This is a statistical estimate, not a guarantee.
+                  </div>
+                )}
+              </>
+            )}
+          </Panel>
+
           {!player && !loading && !error && (
             <Panel style={{ minHeight: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <p style={{ color: "#56646E", fontSize: 14 }}>Search for an NHL skater on the left to pull up their live scoring profile.</p>
@@ -382,7 +496,32 @@ export default function NhlGoalTracker() {
                   <div style={{ flex: 1, minWidth: 200 }}>
                     <div style={{ fontSize: 12, color: "#56646E", marginBottom: 2 }}>{teamName(player.team)} · {player.position}</div>
                     <h2 className="num" style={{ fontSize: 28, margin: "0 0 8px", fontWeight: 600 }}>{player.name}</h2>
-                    <StreakBadge streak={streak} />
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <StreakBadge streak={streak} />
+                      {tonight === null && <span style={{ fontSize: 12, color: "#8A97A0" }}>Checking tonight's schedule…</span>}
+                      {tonight === "none" && <span style={{ fontSize: 12, color: "#8A97A0" }}>Not scheduled to play today</span>}
+                      {tonight && tonight !== "none" && (
+                        <span style={{ fontSize: 12, color: "#56646E" }}>
+                          Plays tonight {tonight.home ? "vs" : "@"} {teamName(tonight.opponent)}
+                        </span>
+                      )}
+                    </div>
+                    {tonightPrediction && (
+                      <button
+                        onClick={addToParlay}
+                        disabled={parlay.length >= 5 || parlay.some((x) => x.id === player.id)}
+                        style={{
+                          marginTop: 10, padding: "7px 14px", fontSize: 12, fontWeight: 600,
+                          background: parlay.some((x) => x.id === player.id) ? "#E4EAEE" : "#0B2545",
+                          color: parlay.some((x) => x.id === player.id) ? "#56646E" : "#fff",
+                          border: "none", cursor: parlay.length >= 5 ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        {parlay.some((x) => x.id === player.id)
+                          ? "Added to parlay"
+                          : `+ Add to parlay (${tonightPrediction.scoreProb}% to score)`}
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 28 }}>
                     <div>

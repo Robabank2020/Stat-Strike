@@ -44,6 +44,11 @@ function teamName(abbr) {
   return TEAM_NAMES[abbr] || abbr;
 }
 
+function dailyFaceoffUrl(abbr) {
+  const slug = teamName(abbr).toLowerCase().replace(/\./g, "").replace(/\s+/g, "-");
+  return `https://www.dailyfaceoff.com/teams/${slug}/line-combinations`;
+}
+
 // NHL seasons run Oct→Jun. Resolve the current/most-recent season code
 // (e.g. 20252026) plus a handful of seasons before it, so head-to-head
 // history goes back several years instead of just the last one or two.
@@ -115,6 +120,20 @@ function computeOpponentStats(games) {
 function poissonScoreProb(lambda) {
   if (lambda <= 0) return 0;
   return 1 - Math.exp(-lambda);
+}
+
+function gameStatusLabel(game) {
+  if (game.gameState === "LIVE" || game.gameState === "CRIT") {
+    const period = game.periodDescriptor?.number;
+    return `LIVE${period ? ` · P${period}` : ""} · ${game.awayTeam?.score ?? 0}-${game.homeTeam?.score ?? 0}`;
+  }
+  if (game.gameState === "OFF" || game.gameState === "FINAL") {
+    return `Final · ${game.awayTeam?.score ?? 0}-${game.homeTeam?.score ?? 0}`;
+  }
+  if (game.startTimeUTC) {
+    return new Date(game.startTimeUTC).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  return "Scheduled";
 }
 
 function todayStr() {
@@ -191,6 +210,43 @@ function StreakBadge({ streak }) {
   );
 }
 
+function RosterColumn({ label, abbr, roster, onPick }) {
+  if (roster.error) return <p style={{ fontSize: 13, color: "#FF5A36" }}>Couldn't load this roster.</p>;
+  const skaters = [...(roster.forwards || []), ...(roster.defensemen || [])];
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+        <a
+          href={dailyFaceoffUrl(abbr)}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: 11, color: "#2FB6C4" }}
+        >
+          Lines ↗
+        </a>
+      </div>
+      <div style={{ maxHeight: 260, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+        {skaters.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => onPick({ playerId: p.id, name: `${p.firstName?.default || ""} ${p.lastName?.default || ""}`.trim() })}
+            style={{
+              textAlign: "left", background: "none", border: "none", padding: "5px 6px",
+              fontSize: 13, cursor: "pointer", color: "#0B2545",
+            }}
+            onMouseOver={(e) => (e.currentTarget.style.background = "#F4F8FA")}
+            onMouseOut={(e) => (e.currentTarget.style.background = "none")}
+          >
+            {p.firstName?.default} {p.lastName?.default}
+            <span style={{ color: "#8A97A0", marginLeft: 6 }}>{p.positionCode}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function NhlGoalTracker() {
   useEffect(() => {
     const link = document.createElement("link");
@@ -213,6 +269,54 @@ export default function NhlGoalTracker() {
   const [opponentPick, setOpponentPick] = useState("");
   const [tonight, setTonight] = useState(null); // { opponent, home } | null | "none"
   const [parlay, setParlay] = useState([]);
+
+  const [todaysGames, setTodaysGames] = useState([]);
+  const [gamesLoading, setGamesLoading] = useState(true);
+  const [gamesError, setGamesError] = useState(null);
+  const [selectedGame, setSelectedGame] = useState(null);
+  const [rosterHome, setRosterHome] = useState(null);
+  const [rosterAway, setRosterAway] = useState(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
+
+  const loadTodaysGames = useCallback(async () => {
+    try {
+      const data = await safeJson(proxied(`/v1/schedule/${todayStr()}`));
+      const week = data.gameWeek || [];
+      const today = week.find((d) => d.date === todayStr());
+      setTodaysGames(today?.games || []);
+      setGamesError(null);
+    } catch (e) {
+      setGamesError("Couldn't load today's games.");
+    } finally {
+      setGamesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTodaysGames();
+    const interval = setInterval(loadTodaysGames, 60000);
+    return () => clearInterval(interval);
+  }, [loadTodaysGames]);
+
+  const selectGame = useCallback(async (game) => {
+    setSelectedGame(game);
+    setRosterHome(null);
+    setRosterAway(null);
+    setRosterLoading(true);
+    try {
+      const [home, away] = await Promise.all([
+        safeJson(proxied(`/v1/roster/${game.homeTeam.abbrev}/current`)),
+        safeJson(proxied(`/v1/roster/${game.awayTeam.abbrev}/current`)),
+      ]);
+      setRosterHome(home);
+      setRosterAway(away);
+    } catch (e) {
+      setRosterHome({ error: true });
+      setRosterAway({ error: true });
+    } finally {
+      setRosterLoading(false);
+    }
+  }, []);
 
   const runSearch = useCallback((q) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -420,6 +524,55 @@ export default function NhlGoalTracker() {
         </div>
 
         <div>
+          <Panel style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E" }}>Today's games</div>
+              <span style={{ fontSize: 10, color: "#8A97A0" }}>Refreshes every 60s</span>
+            </div>
+            {gamesLoading && <p style={{ fontSize: 13, color: "#8A97A0" }}>Loading today's schedule…</p>}
+            {gamesError && <p style={{ fontSize: 13, color: "#FF5A36" }}>{gamesError}</p>}
+            {!gamesLoading && !gamesError && todaysGames.length === 0 && (
+              <p style={{ fontSize: 13, color: "#8A97A0" }}>No games scheduled today.</p>
+            )}
+            {!gamesLoading && todaysGames.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {todaysGames.map((g) => {
+                  const isSelected = selectedGame?.id === g.id;
+                  return (
+                    <button
+                      key={g.id}
+                      onClick={() => selectGame(g)}
+                      style={{
+                        padding: "8px 12px", fontSize: 13, cursor: "pointer",
+                        border: "1px solid #0B2545",
+                        background: isSelected ? "#0B2545" : "#fff",
+                        color: isSelected ? "#fff" : "#0B2545",
+                      }}
+                    >
+                      {g.awayTeam?.abbrev} @ {g.homeTeam?.abbrev}
+                      <span style={{ marginLeft: 8, opacity: 0.75 }}>{gameStatusLabel(g)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {selectedGame && (
+              <div style={{ marginTop: 16, borderTop: "1px solid #DCE4E9", paddingTop: 14 }}>
+                <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>
+                  Roster — {teamName(selectedGame.awayTeam?.abbrev)} @ {teamName(selectedGame.homeTeam?.abbrev)}
+                </div>
+                {rosterLoading && <p style={{ fontSize: 13, color: "#8A97A0" }}>Loading rosters…</p>}
+                {!rosterLoading && rosterHome && rosterAway && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                    <RosterColumn label={teamName(selectedGame.awayTeam?.abbrev)} abbr={selectedGame.awayTeam?.abbrev} roster={rosterAway} onPick={loadPlayer} />
+                    <RosterColumn label={teamName(selectedGame.homeTeam?.abbrev)} abbr={selectedGame.homeTeam?.abbrev} roster={rosterHome} onPick={loadPlayer} />
+                  </div>
+                )}
+              </div>
+            )}
+          </Panel>
+
           <Panel style={{ marginBottom: 18, borderColor: "#0B2545" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
               <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E" }}>

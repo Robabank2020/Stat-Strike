@@ -428,6 +428,7 @@ export default function NhlGoalTracker() {
         const schedule = await safeJson(proxied(`/v1/club-schedule/${info.team}/week/now`));
         const tonightGame = findTonightGame(schedule, info.team);
         setTonight(tonightGame || "none");
+        if (tonightGame) setOpponentPick(tonightGame.opponent);
       } catch (e) {
         setTonight("none");
       }

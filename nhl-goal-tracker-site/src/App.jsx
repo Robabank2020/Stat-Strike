@@ -150,9 +150,15 @@ async function fetchPlayerOpponentRate(playerId, opponentAbbr) {
   const recentWindow = all.slice(0, 10);
   const recentRate = recentWindow.length ? recentWindow.reduce((s, g) => s + g.goals, 0) / recentWindow.length : 0;
   const vsOpp = all.filter((g) => g.opponent === opponentAbbr);
-  const oppRate = vsOpp.length ? vsOpp.reduce((s, g) => s + g.goals, 0) / vsOpp.length : null;
+  const oppGoals = vsOpp.reduce((s, g) => s + g.goals, 0);
+  const oppRate = vsOpp.length ? oppGoals / vsOpp.length : null;
   const lambda = oppRate !== null && vsOpp.length >= 2 ? 0.65 * recentRate + 0.35 * oppRate : recentRate;
-  return { lambda: +lambda.toFixed(2), oppGames: vsOpp.length, oppRate: oppRate !== null ? +oppRate.toFixed(2) : null };
+  return {
+    lambda: +lambda.toFixed(2),
+    oppGames: vsOpp.length,
+    oppGoals,
+    oppRate: oppRate !== null ? +oppRate.toFixed(2) : null,
+  };
 }
 
 async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
@@ -163,7 +169,7 @@ async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
         const r = await fetchPlayerOpponentRate(p.id, opponentAbbr);
         return { id: p.id, ...r };
       } catch (e) {
-        return { id: p.id, lambda: 0, oppGames: 0, oppRate: null };
+        return { id: p.id, lambda: 0, oppGames: 0, oppGoals: 0, oppRate: null };
       }
     })
   );
@@ -171,7 +177,13 @@ async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
   results.forEach((r) => { map[r.id] = r; });
   const withLambda = (arr) =>
     [...(arr || [])]
-      .map((p) => ({ ...p, _lambda: map[p.id]?.lambda ?? 0, _oppGames: map[p.id]?.oppGames ?? 0, _oppRate: map[p.id]?.oppRate ?? null }))
+      .map((p) => ({
+        ...p,
+        _lambda: map[p.id]?.lambda ?? 0,
+        _oppGames: map[p.id]?.oppGames ?? 0,
+        _oppGoals: map[p.id]?.oppGoals ?? 0,
+        _oppRate: map[p.id]?.oppRate ?? null,
+      }))
       .sort((a, b) => b._lambda - a._lambda);
   return { ...roster, forwards: withLambda(roster.forwards), defensemen: withLambda(roster.defensemen) };
 }
@@ -256,7 +268,9 @@ function RosterPlayerRow({ p, onPick, mode }) {
   if (mode === "history") {
     tag = (
       <span style={{ color: p._oppGames >= 2 ? "#FF5A36" : "#8A97A0", fontWeight: p._oppGames >= 2 ? 700 : 400 }}>
-        {p._lambda} g/gm{p._oppGames >= 2 ? ` (${p._oppGames} mtg)` : " (season)"}
+        {p._oppGames >= 2
+          ? `${p._oppGoals}g in ${p._oppGames} mtg`
+          : `${p._lambda} g/gm (season)`}
       </span>
     );
   } else if (mode === "points") {
@@ -302,7 +316,7 @@ function RosterColumn({ label, abbr, roster, onPick, matchupLoading }) {
       </div>
       <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 8 }}>
         {hasHistory
-          ? "Ranked by real goals/game vs tonight's opponent (season rate if under 2 meetings) — not official lines"
+          ? "Sorted best-to-worst vs tonight's opponent — shows real goals in real meetings (season rate if under 2) — not official lines"
           : matchupLoading
           ? "Pulling real matchup history, hang on…"
           : "Ranked by season points — not official lines"}

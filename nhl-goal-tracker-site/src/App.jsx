@@ -727,6 +727,7 @@ export default function NhlGoalTracker() {
             )}
 
             {selectedGame && (
+              <>
               {topPicks.length > 0 && (
                 <div style={{ marginTop: 16, borderTop: "1px solid #DCE4E9", paddingTop: 14 }}>
                   <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 4 }}>
@@ -775,6 +776,7 @@ export default function NhlGoalTracker() {
                   </div>
                 )}
               </div>
+              </>
             )}
           </Panel>
 

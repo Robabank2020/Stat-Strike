@@ -153,11 +153,13 @@ async function fetchPlayerOpponentRate(playerId, opponentAbbr) {
   const oppGoals = vsOpp.reduce((s, g) => s + g.goals, 0);
   const oppRate = vsOpp.length ? oppGoals / vsOpp.length : null;
   const lambda = oppRate !== null && vsOpp.length >= 2 ? 0.65 * recentRate + 0.35 * oppRate : recentRate;
+  const streak = computeStreak(all); // all is already sorted most-recent-first
   return {
     lambda: +lambda.toFixed(2),
     oppGames: vsOpp.length,
     oppGoals,
     oppRate: oppRate !== null ? +oppRate.toFixed(2) : null,
+    streak,
   };
 }
 
@@ -169,7 +171,7 @@ async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
         const r = await fetchPlayerOpponentRate(p.id, opponentAbbr);
         return { id: p.id, ...r };
       } catch (e) {
-        return { id: p.id, lambda: 0, oppGames: 0, oppGoals: 0, oppRate: null };
+        return { id: p.id, lambda: 0, oppGames: 0, oppGoals: 0, oppRate: null, streak: { type: "neutral", length: 0 } };
       }
     })
   );
@@ -183,6 +185,7 @@ async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
         _oppGames: map[p.id]?.oppGames ?? 0,
         _oppGoals: map[p.id]?.oppGoals ?? 0,
         _oppRate: map[p.id]?.oppRate ?? null,
+        _streak: map[p.id]?.streak ?? { type: "neutral", length: 0 },
       }))
       .sort((a, b) => b._lambda - a._lambda);
   return { ...roster, forwards: withLambda(roster.forwards), defensemen: withLambda(roster.defensemen) };
@@ -390,6 +393,7 @@ export default function NhlGoalTracker() {
   const [rosterAway, setRosterAway] = useState(null);
   const [rosterLoading, setRosterLoading] = useState(false);
   const [matchupLoading, setMatchupLoading] = useState(false);
+  const [topPicks, setTopPicks] = useState([]);
 
   const loadTodaysGames = useCallback(async () => {
     try {
@@ -434,6 +438,7 @@ export default function NhlGoalTracker() {
     setRosterHome(null);
     setRosterAway(null);
     setRosterLoading(true);
+    setTopPicks([]);
     try {
       const season = recentSeasonCodes(1)[0];
       const [home, away, homeStats, awayStats] = await Promise.all([
@@ -458,6 +463,14 @@ export default function NhlGoalTracker() {
       setRosterHome(enrichedHome);
       setRosterAway(enrichedAway);
       setMatchupLoading(false);
+
+      const withTeam = (roster, teamAbbr) =>
+        [...(roster.forwards || []), ...(roster.defensemen || [])].map((p) => ({ ...p, _team: teamAbbr }));
+      const combined = [
+        ...withTeam(enrichedHome, game.homeTeam.abbrev),
+        ...withTeam(enrichedAway, game.awayTeam.abbrev),
+      ];
+      setTopPicks([...combined].sort((a, b) => b._lambda - a._lambda).slice(0, 5));
     } catch (e) {
       setRosterHome({ error: true });
       setRosterAway({ error: true });
@@ -714,6 +727,42 @@ export default function NhlGoalTracker() {
             )}
 
             {selectedGame && (
+              {topPicks.length > 0 && (
+                <div style={{ marginTop: 16, borderTop: "1px solid #DCE4E9", paddingTop: 14 }}>
+                  <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 4 }}>
+                    Top 5 picks tonight
+                  </div>
+                  <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 10 }}>
+                    Ranked by real history vs tonight's opponent, blended with recent form — streak shown for context
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {topPicks.map((p, i) => (
+                      <button
+                        key={p.id}
+                        onClick={() => loadPlayer({ playerId: p.id, name: `${p.firstName?.default || ""} ${p.lastName?.default || ""}`.trim() })}
+                        style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          textAlign: "left", background: "#F4F8FA", border: "1px solid #DCE4E9",
+                          padding: "8px 12px", cursor: "pointer", fontSize: 13, color: "#0B2545",
+                        }}
+                      >
+                        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span className="num" style={{ fontWeight: 700, color: "#8A97A0", width: 16 }}>{i + 1}</span>
+                          <span>
+                            {p.firstName?.default} {p.lastName?.default}
+                            <span style={{ color: "#8A97A0", marginLeft: 6 }}>{teamName(p._team)}</span>
+                          </span>
+                          <StreakBadge streak={p._streak} />
+                        </span>
+                        <span style={{ color: p._oppGames >= 2 ? "#FF5A36" : "#8A97A0", fontWeight: 600 }}>
+                          {p._oppGames >= 2 ? `${p._oppGoals}g in ${p._oppGames} mtg` : `${p._lambda} g/gm (season)`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div style={{ marginTop: 16, borderTop: "1px solid #DCE4E9", paddingTop: 14 }}>
                 <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 10 }}>
                   Roster — {teamName(selectedGame.awayTeam?.abbrev)} @ {teamName(selectedGame.homeTeam?.abbrev)}

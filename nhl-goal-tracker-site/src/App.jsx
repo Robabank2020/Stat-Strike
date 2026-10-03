@@ -136,6 +136,46 @@ function gameStatusLabel(game) {
   return "Scheduled";
 }
 
+// Pulls one player's last 2 seasons and blends recent form with their
+// actual history vs a specific opponent — the real per-player matchup
+// signal (expensive to run for a whole roster, which is why it's optional).
+async function fetchPlayerOpponentRate(playerId, opponentAbbr) {
+  const seasons = recentSeasonCodes(2);
+  const logs = await Promise.all(
+    seasons.map((s) => safeJson(proxied(`/v1/player/${playerId}/game-log/${s}/2`)).catch(() => ({ gameLog: [] })))
+  );
+  const all = [];
+  logs.forEach((l) => (l.gameLog || []).forEach((g) => all.push({ goals: g.goals ?? 0, opponent: g.opponentAbbrev, date: g.gameDate })));
+  all.sort((a, b) => new Date(b.date) - new Date(a.date));
+  const recentWindow = all.slice(0, 10);
+  const recentRate = recentWindow.length ? recentWindow.reduce((s, g) => s + g.goals, 0) / recentWindow.length : 0;
+  const vsOpp = all.filter((g) => g.opponent === opponentAbbr);
+  const oppRate = vsOpp.length ? vsOpp.reduce((s, g) => s + g.goals, 0) / vsOpp.length : null;
+  const lambda = oppRate !== null && vsOpp.length >= 2 ? 0.65 * recentRate + 0.35 * oppRate : recentRate;
+  return { lambda: +lambda.toFixed(2), oppGames: vsOpp.length, oppRate: oppRate !== null ? +oppRate.toFixed(2) : null };
+}
+
+async function enrichRosterWithOpponentHistory(roster, opponentAbbr) {
+  const skaters = [...(roster.forwards || []), ...(roster.defensemen || [])];
+  const results = await Promise.all(
+    skaters.map(async (p) => {
+      try {
+        const r = await fetchPlayerOpponentRate(p.id, opponentAbbr);
+        return { id: p.id, ...r };
+      } catch (e) {
+        return { id: p.id, lambda: 0, oppGames: 0, oppRate: null };
+      }
+    })
+  );
+  const map = {};
+  results.forEach((r) => { map[r.id] = r; });
+  const withLambda = (arr) =>
+    [...(arr || [])]
+      .map((p) => ({ ...p, _lambda: map[p.id]?.lambda ?? 0, _oppGames: map[p.id]?.oppGames ?? 0, _oppRate: map[p.id]?.oppRate ?? null }))
+      .sort((a, b) => b._lambda - a._lambda);
+  return { ...roster, forwards: withLambda(roster.forwards), defensemen: withLambda(roster.defensemen) };
+}
+
 function todayStr() {
   const d = new Date();
   const y = d.getFullYear();
@@ -210,7 +250,18 @@ function StreakBadge({ streak }) {
   );
 }
 
-function RosterPlayerRow({ p, onPick, showPoints }) {
+function RosterPlayerRow({ p, onPick, mode }) {
+  // mode: "points" (fast initial sort), "history" (real matchup data), "none" (goalies)
+  let tag = null;
+  if (mode === "history") {
+    tag = (
+      <span style={{ color: p._oppGames >= 2 ? "#FF5A36" : "#8A97A0", fontWeight: p._oppGames >= 2 ? 700 : 400 }}>
+        {p._lambda} g/gm{p._oppGames >= 2 ? ` (${p._oppGames} mtg)` : " (season)"}
+      </span>
+    );
+  } else if (mode === "points") {
+    tag = <span style={{ color: "#8A97A0" }}>{p._points} pts</span>;
+  }
   return (
     <button
       key={p.id}
@@ -227,13 +278,15 @@ function RosterPlayerRow({ p, onPick, showPoints }) {
         {p.firstName?.default} {p.lastName?.default}
         <span style={{ color: "#8A97A0", marginLeft: 6 }}>{p.positionCode}</span>
       </span>
-      {showPoints && <span style={{ color: "#8A97A0" }}>{p._points} pts</span>}
+      {tag}
     </button>
   );
 }
 
-function RosterColumn({ label, abbr, roster, onPick }) {
+function RosterColumn({ label, abbr, roster, onPick, matchupLoading }) {
   if (roster.error) return <p style={{ fontSize: 13, color: "#FF5A36" }}>Couldn't load this roster.</p>;
+  const hasHistory = roster.forwards?.[0]?._lambda !== undefined;
+  const mode = hasHistory ? "history" : "points";
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
@@ -247,16 +300,22 @@ function RosterColumn({ label, abbr, roster, onPick }) {
           Lines ↗
         </a>
       </div>
-      <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 8 }}>Ranked by season points — not official lines</div>
+      <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 8 }}>
+        {hasHistory
+          ? "Ranked by real goals/game vs tonight's opponent (season rate if under 2 meetings) — not official lines"
+          : matchupLoading
+          ? "Pulling real matchup history, hang on…"
+          : "Ranked by season points — not official lines"}
+      </div>
       <div style={{ maxHeight: 340, overflowY: "auto" }}>
         <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "6px 0 2px" }}>Forwards</div>
-        {(roster.forwards || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints />)}
+        {(roster.forwards || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} mode={mode} />)}
 
         <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "10px 0 2px" }}>Defensemen</div>
-        {(roster.defensemen || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints />)}
+        {(roster.defensemen || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} mode={mode} />)}
 
         <div style={{ fontSize: 10, textTransform: "uppercase", color: "#8A97A0", margin: "10px 0 2px" }}>Goalies</div>
-        {(roster.goalies || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} showPoints={false} />)}
+        {(roster.goalies || []).map((p) => <RosterPlayerRow key={p.id} p={p} onPick={onPick} mode="none" />)}
       </div>
     </div>
   );
@@ -316,6 +375,7 @@ export default function NhlGoalTracker() {
   const [rosterHome, setRosterHome] = useState(null);
   const [rosterAway, setRosterAway] = useState(null);
   const [rosterLoading, setRosterLoading] = useState(false);
+  const [matchupLoading, setMatchupLoading] = useState(false);
 
   const loadTodaysGames = useCallback(async () => {
     try {
@@ -368,13 +428,27 @@ export default function NhlGoalTracker() {
         safeJson(proxied(`/v1/club-stats/${game.homeTeam.abbrev}/${season}/2`)).catch(() => ({ skaters: [] })),
         safeJson(proxied(`/v1/club-stats/${game.awayTeam.abbrev}/${season}/2`)).catch(() => ({ skaters: [] })),
       ]);
-      setRosterHome(rankRoster(home, homeStats.skaters));
-      setRosterAway(rankRoster(away, awayStats.skaters));
+      const rankedHome = rankRoster(home, homeStats.skaters);
+      const rankedAway = rankRoster(away, awayStats.skaters);
+      setRosterHome(rankedHome);
+      setRosterAway(rankedAway);
+      setRosterLoading(false);
+
+      // Roster is visible now (sorted by season points). Separately, pull
+      // real head-to-head history for every skater and re-sort once ready.
+      setMatchupLoading(true);
+      const [enrichedHome, enrichedAway] = await Promise.all([
+        enrichRosterWithOpponentHistory(rankedHome, game.awayTeam.abbrev),
+        enrichRosterWithOpponentHistory(rankedAway, game.homeTeam.abbrev),
+      ]);
+      setRosterHome(enrichedHome);
+      setRosterAway(enrichedAway);
+      setMatchupLoading(false);
     } catch (e) {
       setRosterHome({ error: true });
       setRosterAway({ error: true });
-    } finally {
       setRosterLoading(false);
+      setMatchupLoading(false);
     }
   }, []);
 
@@ -633,8 +707,8 @@ export default function NhlGoalTracker() {
                 {rosterLoading && <p style={{ fontSize: 13, color: "#8A97A0" }}>Loading rosters…</p>}
                 {!rosterLoading && rosterHome && rosterAway && (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                    <RosterColumn label={teamName(selectedGame.awayTeam?.abbrev)} abbr={selectedGame.awayTeam?.abbrev} roster={rosterAway} onPick={loadPlayer} />
-                    <RosterColumn label={teamName(selectedGame.homeTeam?.abbrev)} abbr={selectedGame.homeTeam?.abbrev} roster={rosterHome} onPick={loadPlayer} />
+                    <RosterColumn label={teamName(selectedGame.awayTeam?.abbrev)} abbr={selectedGame.awayTeam?.abbrev} roster={rosterAway} onPick={loadPlayer} matchupLoading={matchupLoading} />
+                    <RosterColumn label={teamName(selectedGame.homeTeam?.abbrev)} abbr={selectedGame.homeTeam?.abbrev} roster={rosterHome} onPick={loadPlayer} matchupLoading={matchupLoading} />
                   </div>
                 )}
               </div>

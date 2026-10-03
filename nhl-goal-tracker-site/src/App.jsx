@@ -262,6 +262,30 @@ function RosterColumn({ label, abbr, roster, onPick }) {
   );
 }
 
+function GameSquares({ games }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+      {games.map((g, i) => {
+        const scored = g.goals > 0;
+        return (
+          <div
+            key={i}
+            title={`${fmtDate(g.date)} vs ${g.opponent} — ${g.goals} goal${g.goals === 1 ? "" : "s"}`}
+            style={{
+              width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 10, fontWeight: 700, border: "1px solid #DCE4E9",
+              background: scored ? "#E8FAF8" : "#FFF0ED",
+              color: scored ? "#1E9E8F" : "#D6472F",
+            }}
+          >
+            {scored ? (g.goals > 1 ? g.goals : "•") : "×"}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function NhlGoalTracker() {
   useEffect(() => {
     const link = document.createElement("link");
@@ -394,13 +418,14 @@ export default function NhlGoalTracker() {
       );
 
       const merged = [];
-      logs.forEach((l) => {
+      logs.forEach((l, idx) => {
         (l.gameLog || []).forEach((g) => {
           merged.push({
             date: g.gameDate,
             opponent: g.opponentAbbrev,
             goals: g.goals ?? 0,
             home: g.homeRoadFlag === "H",
+            season: seasons[idx],
           });
         });
       });
@@ -464,6 +489,12 @@ export default function NhlGoalTracker() {
   const prediction = useMemo(
     () => (activeOpponent ? computePrediction(gamesDesc, activeOpponent) : null),
     [gamesDesc, activeOpponent]
+  );
+
+  const currentSeasonCode = recentSeasonCodes(1)[0];
+  const currentSeasonGames = useMemo(
+    () => games.filter((g) => g.season === currentSeasonCode),
+    [games, currentSeasonCode]
   );
 
   const tonightOpponent = tonight && tonight !== "none" ? tonight.opponent : "";
@@ -863,6 +894,20 @@ export default function NhlGoalTracker() {
                   )}
                 </Panel>
               </div>
+
+              <Panel style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 12, textTransform: "uppercase", color: "#56646E", marginBottom: 4 }}>
+                  This season, game by game ({currentSeasonGames.length} of 82)
+                </div>
+                <div style={{ fontSize: 10, color: "#8A97A0", marginBottom: 10 }}>
+                  Green = scored (number shown if 2+) · Red × = no goal
+                </div>
+                {currentSeasonGames.length === 0 ? (
+                  <p style={{ fontSize: 13, color: "#8A97A0" }}>No games played yet this season.</p>
+                ) : (
+                  <GameSquares games={currentSeasonGames} />
+                )}
+              </Panel>
             </>
           )}
         </div>
